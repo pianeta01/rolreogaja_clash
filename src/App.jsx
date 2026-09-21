@@ -168,6 +168,8 @@ function AdminPage({ players, teams, matches, refresh, session }) {
   const [teamForm, setTeamForm] = useState({ name: '', top: '', jungle: '', mid: '', adc: '', support: '' })
   const today = new Date().toISOString().slice(0, 10)
   const [matchForm, setMatchForm] = useState({ date: today, teamA: '', teamB: '', scoreA: 2, scoreB: 1, detailUrl1: '', detailUrl2: '', detailUrl3: '', detailUrl4: '', detailUrl5: '' })
+  const [editingMatchId, setEditingMatchId] = useState(null)
+  const [editingMatchOriginal, setEditingMatchOriginal] = useState(null)
 
   const activePlayers = players.filter((p) => p.active !== false)
   const inactivePlayers = players.filter((p) => p.active === false)
@@ -175,7 +177,9 @@ function AdminPage({ players, teams, matches, refresh, session }) {
     .filter((p) => p.name.toLowerCase().includes(playerSearch.trim().toLowerCase()))
     .slice()
     .sort((a, b) => a.name.localeCompare(b.name, 'ko'))
-  const activeTeams = teams.filter((t) => t.alive)
+  const teamsByNewest = teams.slice().sort((a, b) => (b.created_at ?? '').localeCompare(a.created_at ?? ''))
+  const matchesByNewest = matches.slice().sort((a, b) => b.date.localeCompare(a.date) || (b.created_at ?? '').localeCompare(a.created_at ?? ''))
+  const matchTeamOptions = teams.filter((t) => t.alive || t.id === matchForm.teamA || t.id === matchForm.teamB)
 
   async function savePlayer(e) {
     e.preventDefault()
@@ -231,22 +235,80 @@ function AdminPage({ players, teams, matches, refresh, session }) {
     }
   }
 
-  async function addMatch(e) {
+  async function deleteTeam(team) {
+    if (!window.confirm(`'${team.name}' 팀을 완전히 삭제할까요? 이 작업은 되돌릴 수 없습니다.`)) return
+    const { error } = await supabase.from('teams').delete().eq('id', team.id)
+    setMessage(error ? error.message : `'${team.name}' 팀을 삭제했습니다.`)
+    if (!error) refresh()
+  }
+
+  function editMatch(match) {
+    setEditingMatchId(match.id)
+    setEditingMatchOriginal(match)
+    setMatchForm({
+      date: match.date,
+      teamA: match.team_a,
+      teamB: match.team_b,
+      scoreA: match.score_a,
+      scoreB: match.score_b,
+      detailUrl1: match.detail_url_1 ?? '',
+      detailUrl2: match.detail_url_2 ?? '',
+      detailUrl3: match.detail_url_3 ?? '',
+      detailUrl4: match.detail_url_4 ?? '',
+      detailUrl5: match.detail_url_5 ?? '',
+    })
+  }
+
+  function cancelMatchEdit() {
+    setEditingMatchId(null)
+    setEditingMatchOriginal(null)
+    setMatchForm({ date: new Date().toISOString().slice(0, 10), teamA: '', teamB: '', scoreA: 2, scoreB: 1, detailUrl1: '', detailUrl2: '', detailUrl3: '', detailUrl4: '', detailUrl5: '' })
+  }
+
+  async function saveMatch(e) {
     e.preventDefault()
     if (!matchForm.teamA || !matchForm.teamB || matchForm.teamA === matchForm.teamB) return setMessage('서로 다른 두 팀을 선택하세요.')
     if (!matchForm.date || matchForm.date > new Date().toISOString().slice(0, 10)) return setMessage('미래 날짜의 경기는 등록할 수 없습니다.')
     if (Number(matchForm.scoreA) === Number(matchForm.scoreB)) return setMessage('무승부는 입력할 수 없습니다.')
     if (Number(matchForm.scoreA) > 3 || Number(matchForm.scoreB) > 3 || Number(matchForm.scoreA) < 0 || Number(matchForm.scoreB) < 0) return setMessage('경기 점수는 0~3 사이로 입력하세요.')
-    const id = `m${Date.now()}`
     const scoreA = Number(matchForm.scoreA)
     const scoreB = Number(matchForm.scoreB)
-    const { error } = await supabase.from('matches').insert({ id, date: matchForm.date, team_a: matchForm.teamA, team_b: matchForm.teamB, score_a: scoreA, score_b: scoreB, detail_url_1: matchForm.detailUrl1.trim() || null, detail_url_2: matchForm.detailUrl2.trim() || null, detail_url_3: matchForm.detailUrl3.trim() || null, detail_url_4: matchForm.detailUrl4.trim() || null, detail_url_5: matchForm.detailUrl5.trim() || null })
+    const payload = {
+      date: matchForm.date,
+      team_a: matchForm.teamA,
+      team_b: matchForm.teamB,
+      score_a: scoreA,
+      score_b: scoreB,
+      detail_url_1: matchForm.detailUrl1.trim() || null,
+      detail_url_2: matchForm.detailUrl2.trim() || null,
+      detail_url_3: matchForm.detailUrl3.trim() || null,
+      detail_url_4: matchForm.detailUrl4.trim() || null,
+      detail_url_5: matchForm.detailUrl5.trim() || null,
+    }
+    const query = editingMatchId
+      ? supabase.from('matches').update(payload).eq('id', editingMatchId)
+      : supabase.from('matches').insert({ id: `m${Date.now()}`, ...payload })
+    const { error } = await query
     if (error) return setMessage(error.message)
-    const loserId = scoreA > scoreB ? matchForm.teamB : matchForm.teamA
-    const { error: teamError } = await supabase.from('teams').update({ alive: false }).eq('id', loserId)
-    setMessage(teamError ? teamError.message : '경기를 등록했습니다. 패배 팀은 자동으로 해체 처리했습니다.')
+
+    const newLoserId = scoreA > scoreB ? matchForm.teamB : matchForm.teamA
+    let teamError = null
+    if (editingMatchOriginal) {
+      const oldScoreA = Number(editingMatchOriginal.score_a)
+      const oldScoreB = Number(editingMatchOriginal.score_b)
+      const oldLoserId = oldScoreA > oldScoreB ? editingMatchOriginal.team_b : editingMatchOriginal.team_a
+      if (oldLoserId && oldLoserId !== newLoserId) {
+        const revert = await supabase.from('teams').update({ alive: true }).eq('id', oldLoserId)
+        teamError = revert.error
+      }
+    }
     if (!teamError) {
-      setMatchForm({ date: new Date().toISOString().slice(0, 10), teamA: '', teamB: '', scoreA: 2, scoreB: 1, detailUrl1: '', detailUrl2: '', detailUrl3: '', detailUrl4: '', detailUrl5: '' })
+      const lose = await supabase.from('teams').update({ alive: false }).eq('id', newLoserId)
+      teamError = lose.error
+    }
+    setMessage(teamError ? teamError.message : (editingMatchId ? '경기 정보를 수정했습니다.' : '경기를 등록했습니다. 패배 팀은 자동으로 해체 처리했습니다.'))
+    if (!teamError) {
+      cancelMatchEdit()
       refresh()
     }
   }
@@ -326,22 +388,62 @@ function AdminPage({ players, teams, matches, refresh, session }) {
             ))}
             <button className="primary-button" type="submit">팀 추가</button>
           </form>
+
+          <div className="admin-card">
+            <h3>팀 현황</h3>
+            <div className="admin-list">
+              {teamsByNewest.length === 0 && <div className="empty-small">등록된 팀이 없습니다.</div>}
+              {teamsByNewest.map((team) => (
+                <div className="admin-list-row" key={team.id}>
+                  <div className="player-admin-main team-admin-main">
+                    <strong>{team.name}</strong>
+                    <span>{team.alive ? '생존' : '해체'} · {getScore(players, team)}점</span>
+                    <div className="player-admin-scores">
+                      {POSITION_ORDER.map((p) => <span key={p}>{POSITION_LABELS[p]} {getPlayer(players, team.players?.[p])?.name ?? '-'}</span>)}
+                    </div>
+                  </div>
+                  <button className="secondary-button" onClick={() => deleteTeam(team)}>삭제</button>
+                </div>
+              ))}
+            </div>
+          </div>
         </div>
       )}
 
       {tab === 'matches' && (
         <div className="admin-grid">
-          <form className="admin-card" onSubmit={addMatch}>
-            <h3>경기 결과 추가</h3>
+          <form className="admin-card" onSubmit={saveMatch}>
+            <h3>{editingMatchId ? '경기 결과 수정' : '경기 결과 추가'}</h3>
             <label className="admin-field">날짜<input type="date" max={today} value={matchForm.date} onChange={(e) => setMatchForm({ ...matchForm, date: e.target.value })} /></label>
-            <label className="admin-field">팀 A<select value={matchForm.teamA} onChange={(e) => setMatchForm({ ...matchForm, teamA: e.target.value })}><option value="">선택</option>{activeTeams.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}</select></label>
-            <label className="admin-field">팀 B<select value={matchForm.teamB} onChange={(e) => setMatchForm({ ...matchForm, teamB: e.target.value })}><option value="">선택</option>{activeTeams.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}</select></label>
+            <label className="admin-field">팀 A<select value={matchForm.teamA} onChange={(e) => setMatchForm({ ...matchForm, teamA: e.target.value })}><option value="">선택</option>{matchTeamOptions.map((t) => <option key={t.id} value={t.id}>{t.name}{!t.alive ? ' (해체)' : ''}</option>)}</select></label>
+            <label className="admin-field">팀 B<select value={matchForm.teamB} onChange={(e) => setMatchForm({ ...matchForm, teamB: e.target.value })}><option value="">선택</option>{matchTeamOptions.map((t) => <option key={t.id} value={t.id}>{t.name}{!t.alive ? ' (해체)' : ''}</option>)}</select></label>
             <div className="score-input-grid two"><label>팀 A 점수<input type="number" min="0" value={matchForm.scoreA} onChange={(e) => setMatchForm({ ...matchForm, scoreA: e.target.value })} /></label><label>팀 B 점수<input type="number" min="0" value={matchForm.scoreB} onChange={(e) => setMatchForm({ ...matchForm, scoreB: e.target.value })} /></label></div>
             <div className="match-url-grid">
               {[1, 2, 3, 4, 5].map((n) => <label className="admin-field" key={n}>{n}경기 상세 URL <span className="field-hint">선택사항</span><input type="url" placeholder="https://..." value={matchForm[`detailUrl${n}`]} onChange={(e) => setMatchForm({ ...matchForm, [`detailUrl${n}`]: e.target.value })} /></label>)}
             </div>
-            <button className="primary-button" type="submit">경기 등록</button>
+            <div className="button-row">
+              <button className="primary-button" type="submit">{editingMatchId ? '수정 저장' : '경기 등록'}</button>
+              {editingMatchId && <button className="secondary-button" type="button" onClick={cancelMatchEdit}>취소</button>}
+            </div>
           </form>
+
+          <div className="admin-card">
+            <h3>경기 현황</h3>
+            <div className="admin-list">
+              {matchesByNewest.length === 0 && <div className="empty-small">등록된 경기가 없습니다.</div>}
+              {matchesByNewest.map((match) => (
+                <div className={`admin-list-row clickable ${editingMatchId === match.id ? 'selected' : ''}`} key={match.id} onClick={() => editMatch(match)}>
+                  <div className="player-admin-main match-admin-main">
+                    <strong>{match.date}</strong>
+                    <span>{teams.find((t) => t.id === match.team_a)?.name ?? match.team_a} vs {teams.find((t) => t.id === match.team_b)?.name ?? match.team_b}</span>
+                    <div className="player-admin-scores">
+                      <span>{match.score_a} : {match.score_b}</span>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
         </div>
       )}
     </section>

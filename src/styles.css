@@ -959,7 +959,7 @@ h2 {
 .admin-list {
   display: grid;
   gap: 8px;
-  max-height: 540px;
+  max-height: 760px;
   overflow: auto;
 }
 
@@ -1176,6 +1176,14 @@ h2 {
 
 .player-search-input:focus {
   border-color: #2563eb;
+}
+
+.team-admin-main {
+  grid-template-columns: minmax(90px, 150px) minmax(110px, 160px) 1fr;
+}
+
+.match-admin-main {
+  grid-template-columns: minmax(92px, 112px) 1fr auto;
 }
 
 @media (max-width: 560px) {
