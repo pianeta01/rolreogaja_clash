@@ -149,7 +149,7 @@ function TeamCard({ team, players, teams, matches }) {
                 {[match.detail_url_1, match.detail_url_2, match.detail_url_3, match.detail_url_4, match.detail_url_5].slice(0, Math.min(5, Math.max(1, (Number(ownScore) || 0) + (Number(opponentScore) || 0)))).map((url, index) => url ? (
                   <a key={index} className="match-detail-link" href={url} target="_blank" rel="noreferrer">{index + 1}경기 ↗</a>
                 ) : (
-                  <span key={index} className="match-detail-empty">{index + 1}경기</span>
+                  <span key={index} className="match-detail-empty"></span>
                 ))}
               </span>
               <strong className={won ? 'win' : 'loss'}>{ownScore} : {opponentScore} {won ? '승' : '패'}</strong>
