@@ -1192,3 +1192,77 @@ h2 {
     gap: 4px;
   }
 }
+
+
+/* 임시 포지션 점수 */
+.score-input-item {
+  min-width: 0;
+}
+
+.temporary-check {
+  display: flex !important;
+  align-items: center;
+  gap: 5px;
+  margin-top: 6px;
+  color: #fbbf24 !important;
+  font-size: 10px !important;
+  font-weight: 800 !important;
+  cursor: pointer;
+}
+
+.temporary-check input {
+  width: auto !important;
+  margin: 0 !important;
+  accent-color: #f59e0b;
+}
+
+.temporary-check input:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+
+.score-badge.temporary {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+}
+
+.score-badge.temporary small {
+  color: #fbbf24;
+  font-size: 9px;
+  font-weight: 900;
+}
+
+.temporary-label {
+  display: inline-block;
+  margin-left: 5px;
+  padding: 2px 4px;
+  border-radius: 4px;
+  color: #fbbf24;
+  background: rgba(245, 158, 11, 0.12);
+  font-size: 9px;
+  font-style: normal;
+  font-weight: 900;
+}
+
+.player-admin-scores span {
+  white-space: nowrap;
+}
+
+/* 팀 만들기 - 남은 팀 점수 */
+.remaining-score {
+  margin-top: 4px;
+  font-size: 12px;
+  color: #9ca3af;
+}
+
+.remaining-score strong {
+  margin-left: 4px;
+  color: #f3f4f6;
+  font-size: 14px;
+}
+
+.score-card.over .remaining-score strong {
+  color: #f87171;
+}

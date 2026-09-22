@@ -10,6 +10,10 @@ function getPlayer(players, playerId) {
   return players.find((player) => player.id === playerId)
 }
 
+function isTemporaryScore(player, position) {
+  return player?.position_score_status?.[position] === true
+}
+
 function getScore(players, team) {
   return POSITION_ORDER.reduce((sum, position) => {
     const player = getPlayer(players, team.players?.[position])
@@ -160,11 +164,23 @@ function TeamCard({ team, players, teams, matches }) {
 function AdminPage({ players, teams, matches, refresh, session }) {
   const [tab, setTab] = useState('players')
   const [message, setMessage] = useState('')
-  const emptyPlayerForm = () => ({ id: null, name: '', nickname: '', tag: 'KR1', top: '', jungle: '', mid: '', adc: '', support: '' })
+  const emptyPlayerForm = () => ({
+    id: null,
+    name: '',
+    nickname: '',
+    tag: 'KR1',
+    top: '',
+    jungle: '',
+    mid: '',
+    adc: '',
+    support: '',
+    temporary: { top: false, jungle: false, mid: false, adc: false, support: false },
+  })
   const [playerForm, setPlayerForm] = useState(emptyPlayerForm())
   const [editingPlayerId, setEditingPlayerId] = useState(null)
   const [playerListTab, setPlayerListTab] = useState('active')
   const [playerSearch, setPlayerSearch] = useState('')
+  const [teamListTab, setTeamListTab] = useState('alive')
   const [teamForm, setTeamForm] = useState({ name: '', top: '', jungle: '', mid: '', adc: '', support: '' })
   const today = new Date().toISOString().slice(0, 10)
   const [matchForm, setMatchForm] = useState({ date: today, teamA: '', teamB: '', scoreA: 2, scoreB: 1, detailUrl1: '', detailUrl2: '', detailUrl3: '', detailUrl4: '', detailUrl5: '' })
@@ -177,16 +193,35 @@ function AdminPage({ players, teams, matches, refresh, session }) {
     .filter((p) => p.name.toLowerCase().includes(playerSearch.trim().toLowerCase()))
     .slice()
     .sort((a, b) => a.name.localeCompare(b.name, 'ko'))
-  const teamsByNewest = teams.slice().sort((a, b) => (b.created_at ?? '').localeCompare(a.created_at ?? ''))
+  const teamsByNewest = teams
+    .filter((team) => (teamListTab === 'alive' ? team.alive : !team.alive))
+    .slice()
+    .sort((a, b) => (b.created_at ?? '').localeCompare(a.created_at ?? ''))
+  const aliveTeams = teams.filter((team) => team.alive)
+  const inactiveTeams = teams.filter((team) => !team.alive)
   const matchesByNewest = matches.slice().sort((a, b) => b.date.localeCompare(a.date) || (b.created_at ?? '').localeCompare(a.created_at ?? ''))
   const matchTeamOptions = teams.filter((t) => t.alive || t.id === matchForm.teamA || t.id === matchForm.teamB)
 
   async function savePlayer(e) {
     e.preventDefault()
-    const positions = Object.fromEntries(POSITION_ORDER.filter((p) => playerForm[p] !== '').map((p) => [p, Number(playerForm[p])]))
+    const positions = Object.fromEntries(
+      POSITION_ORDER
+        .filter((p) => playerForm[p] !== '')
+        .map((p) => [p, Number(playerForm[p])]),
+    )
+    const positionScoreStatus = Object.fromEntries(
+      POSITION_ORDER
+        .filter((p) => playerForm[p] !== '')
+        .map((p) => [p, Boolean(playerForm.temporary?.[p])]),
+    )
     if (!playerForm.name || !playerForm.nickname || !playerForm.tag) return setMessage('이름, 게임 닉네임, 태그를 입력하세요.')
-    if (!Object.keys(positions).length) return setMessage('포지션 점수를 하나 이상 입력하세요.')
-    const payload = { name: playerForm.name, nickname: playerForm.nickname, tag: playerForm.tag, positions }
+    const payload = {
+      name: playerForm.name,
+      nickname: playerForm.nickname,
+      tag: playerForm.tag,
+      positions,
+      position_score_status: positionScoreStatus,
+    }
     const query = editingPlayerId
       ? supabase.from('players').update(payload).eq('id', editingPlayerId)
       : supabase.from('players').insert({ id: `p${Date.now()}`, active: true, ...payload })
@@ -207,6 +242,7 @@ function AdminPage({ players, teams, matches, refresh, session }) {
       nickname: player.nickname,
       tag: player.tag,
       ...Object.fromEntries(POSITION_ORDER.map((p) => [p, player.positions?.[p] ?? ''])),
+      temporary: Object.fromEntries(POSITION_ORDER.map((p) => [p, isTemporaryScore(player, p)])),
     })
   }
 
@@ -235,10 +271,12 @@ function AdminPage({ players, teams, matches, refresh, session }) {
     }
   }
 
-  async function deleteTeam(team) {
-    if (!window.confirm(`'${team.name}' 팀을 완전히 삭제할까요? 이 작업은 되돌릴 수 없습니다.`)) return
-    const { error } = await supabase.from('teams').delete().eq('id', team.id)
-    setMessage(error ? error.message : `'${team.name}' 팀을 삭제했습니다.`)
+  async function toggleTeamAlive(team) {
+    const nextAlive = !team.alive
+    const action = nextAlive ? '생존' : '해제'
+    if (!window.confirm(`'${team.name}' 팀을 ${action} 상태로 변경할까요?`)) return
+    const { error } = await supabase.from('teams').update({ alive: nextAlive }).eq('id', team.id)
+    setMessage(error ? error.message : `'${team.name}' 팀을 ${action} 상태로 변경했습니다.`)
     if (!error) refresh()
   }
 
@@ -339,7 +377,26 @@ function AdminPage({ players, teams, matches, refresh, session }) {
             <input placeholder="게임 닉네임" value={playerForm.nickname} onChange={(e) => setPlayerForm({ ...playerForm, nickname: e.target.value })} required />
             <input placeholder="태그 (예: KR1)" value={playerForm.tag} onChange={(e) => setPlayerForm({ ...playerForm, tag: e.target.value })} required />
             <div className="score-input-grid">
-              {POSITION_ORDER.map((p) => <label key={p}>{POSITION_LABELS[p]}<input type="number" min="0" value={playerForm[p]} onChange={(e) => setPlayerForm({ ...playerForm, [p]: e.target.value })} /></label>)}
+              {POSITION_ORDER.map((p) => (
+                <div className="score-input-item" key={p}>
+                  <label>
+                    {POSITION_LABELS[p]}
+                    <input type="number" min="0" value={playerForm[p]} onChange={(e) => setPlayerForm({ ...playerForm, [p]: e.target.value })} />
+                  </label>
+                  <label className="temporary-check">
+                    <input
+                      type="checkbox"
+                      checked={Boolean(playerForm.temporary?.[p])}
+                      disabled={playerForm[p] === ''}
+                      onChange={(e) => setPlayerForm({
+                        ...playerForm,
+                        temporary: { ...playerForm.temporary, [p]: e.target.checked },
+                      })}
+                    />
+                    임시
+                  </label>
+                </div>
+              ))}
             </div>
             <div className="button-row">
               <button className="primary-button" type="submit">{editingPlayerId ? '수정 저장' : '선수 추가'}</button>
@@ -362,7 +419,12 @@ function AdminPage({ players, teams, matches, refresh, session }) {
                     <strong>{player.name}</strong>
                     <span>{player.nickname}#{player.tag} · {player.active ? '활동' : '탈퇴'}</span>
                     <div className="player-admin-scores">
-                      {POSITION_ORDER.filter((p) => player.positions?.[p] !== undefined).map((p) => <span key={p}>{POSITION_LABELS[p]} {player.positions[p]}점</span>)}
+                      {POSITION_ORDER.filter((p) => player.positions?.[p] !== undefined).map((p) => (
+                        <span key={p}>
+                          {POSITION_LABELS[p]} {player.positions[p]}점
+                          {isTemporaryScore(player, p) && <em className="temporary-label">임시</em>}
+                        </span>
+                      ))}
                     </div>
                   </div>
                   <button className="secondary-button" onClick={(e) => { e.stopPropagation(); togglePlayer(player) }}>{player.active ? '탈퇴 처리' : '복귀 처리'}</button>
@@ -382,7 +444,7 @@ function AdminPage({ players, teams, matches, refresh, session }) {
               <label className="admin-field" key={p}>{POSITION_LABELS[p]}
                 <select value={teamForm[p]} onChange={(e) => setTeamForm({ ...teamForm, [p]: e.target.value })}>
                   <option value="">선택</option>
-                  {activePlayers.filter((x) => x.positions?.[p] !== undefined).sort((a, b) => b.positions[p] - a.positions[p]).map((x) => <option key={x.id} value={x.id}>{x.name} · {x.positions[p]}점</option>)}
+                  {activePlayers.filter((x) => x.positions?.[p] !== undefined && !isTemporaryScore(x, p)).sort((a, b) => b.positions[p] - a.positions[p]).map((x) => <option key={x.id} value={x.id}>{x.name} · {x.positions[p]}점</option>)}
                 </select>
               </label>
             ))}
@@ -391,18 +453,22 @@ function AdminPage({ players, teams, matches, refresh, session }) {
 
           <div className="admin-card">
             <h3>팀 현황</h3>
+            <div className="player-list-tabs">
+              <button type="button" className={teamListTab === 'alive' ? 'active' : ''} onClick={() => setTeamListTab('alive')}>생존<span>{aliveTeams.length}</span></button>
+              <button type="button" className={teamListTab === 'inactive' ? 'active' : ''} onClick={() => setTeamListTab('inactive')}>해제<span>{inactiveTeams.length}</span></button>
+            </div>
             <div className="admin-list">
-              {teamsByNewest.length === 0 && <div className="empty-small">등록된 팀이 없습니다.</div>}
+              {teamsByNewest.length === 0 && <div className="empty-small">표시할 팀이 없습니다.</div>}
               {teamsByNewest.map((team) => (
                 <div className="admin-list-row" key={team.id}>
                   <div className="player-admin-main team-admin-main">
                     <strong>{team.name}</strong>
-                    <span>{team.alive ? '생존' : '해체'} · {getScore(players, team)}점</span>
+                    <span>{team.alive ? '생존' : '해제'} · {getScore(players, team)}점</span>
                     <div className="player-admin-scores">
                       {POSITION_ORDER.map((p) => <span key={p}>{POSITION_LABELS[p]} {getPlayer(players, team.players?.[p])?.name ?? '-'}</span>)}
                     </div>
                   </div>
-                  <button className="secondary-button" onClick={() => deleteTeam(team)}>삭제</button>
+                  <button className="secondary-button" onClick={() => toggleTeamAlive(team)}>{team.alive ? '해제 처리' : '생존 처리'}</button>
                 </div>
               ))}
             </div>
@@ -563,14 +629,17 @@ function App() {
           <section>
             <div className="page-heading"><div><span className="eyebrow">PLAYERS</span><h2>포지션별 선수 명단</h2></div><div className="score-rule">팀 제한 점수 <strong>{MAX_SCORE}</strong></div></div>
             <div className="position-tabs">{POSITION_ORDER.map((pos) => <button key={pos} className={position === pos ? 'active' : ''} onClick={() => setPosition(pos)}>{POSITION_LABELS[pos]}<span>{players.filter((p) => p.active !== false && p.positions?.[pos] !== undefined).length}</span></button>)}</div>
-            <div className="player-table"><div className="table-head"><span>이름</span><span>게임 닉네임</span><span>점수</span></div>{playersForPosition.slice().sort((a, b) => b.positions[position] - a.positions[position]).map((player) => <div className="table-row" key={player.id}><span className="player-name">{player.name}</span><a href={opggUrl(player)} target="_blank" rel="noreferrer">{player.nickname}#{player.tag}<span className="external">↗</span></a><strong className="score-badge">{player.positions[position]}</strong></div>)}</div>
+            <div className="player-table"><div className="table-head"><span>이름</span><span>게임 닉네임</span><span>점수</span></div>{playersForPosition.slice().sort((a, b) => b.positions[position] - a.positions[position]).map((player) => <div className="table-row" key={player.id}><span className="player-name">{player.name}</span><a href={opggUrl(player)} target="_blank" rel="noreferrer">{player.nickname}#{player.tag}<span className="external">↗</span></a><strong className={`score-badge ${isTemporaryScore(player, position) ? 'temporary' : ''}`}>
+  {player.positions[position]}
+  {isTemporaryScore(player, position) && <small>임시</small>}
+</strong></div>)}</div>
           </section>
         )}
 
         {page === 'builder' && !loading && (
           <section>
             <div className="page-heading"><div><span className="eyebrow">TEAM BUILDER</span><h2>팀 구성해보기</h2><p>각 포지션에서 1명씩 선택하세요. 121점까지 허용됩니다.</p></div></div>
-            <div className="builder-layout"><div className="builder-panel"><div className="builder-slots">{POSITION_ORDER.map((pos) => { const player = getPlayer(players, selected[pos]); return <div className="builder-slot" key={pos}><div className="slot-position">{POSITION_LABELS[pos]}</div><select value={selected[pos] ?? ''} onChange={(e) => choosePlayer(pos, e.target.value)}><option value="">선수를 선택하세요</option>{players.filter((p) => p.active !== false && p.positions?.[pos] !== undefined).sort((a, b) => b.positions[pos] - a.positions[pos]).map((p) => <option value={p.id} key={p.id}>{p.name} · {p.nickname} · {p.positions[pos]}점</option>)}</select><span className="slot-score">{player?.positions?.[pos] ?? 0}</span></div> })}</div><button className="secondary-button" onClick={() => setSelected({})}>다시 구성하기</button></div><aside className={`score-card ${currentScore > MAX_SCORE ? 'over' : ''}`}><span>현재 팀 점수</span><div className="big-score">{currentScore}<small> / {MAX_SCORE}</small></div>{currentScore > MAX_SCORE ? <div className="score-warning">⚠ 기준 점수를 초과했습니다.</div> : <div className="score-ok">{selectedComplete ? '✓ 팀 구성 가능' : '포지션을 모두 선택해주세요'}</div>}<div className="score-bar"><div style={{ width: `${Math.min((currentScore / MAX_SCORE) * 100, 100)}%` }} /></div></aside></div>
+            <div className="builder-layout"><div className="builder-panel"><div className="builder-slots">{POSITION_ORDER.map((pos) => { const player = getPlayer(players, selected[pos]); return <div className="builder-slot" key={pos}><div className="slot-position">{POSITION_LABELS[pos]}</div><select value={selected[pos] ?? ''} onChange={(e) => choosePlayer(pos, e.target.value)}><option value="">선수를 선택하세요</option>{players.filter((p) => p.active !== false && p.positions?.[pos] !== undefined && !isTemporaryScore(p, pos)).sort((a, b) => b.positions[pos] - a.positions[pos]).map((p) => <option value={p.id} key={p.id}>{p.name} · {p.nickname} · {p.positions[pos]}점</option>)}</select><span className="slot-score">{player?.positions?.[pos] ?? 0}</span></div> })}</div><button className="secondary-button" onClick={() => setSelected({})}>다시 구성하기</button></div><aside className={`score-card ${currentScore > MAX_SCORE ? 'over' : ''}`}><span>현재 팀 점수</span><div className="big-score">{currentScore}<small> / {MAX_SCORE}</small></div><div className="remaining-score">남은 팀 점수 <strong>{MAX_SCORE - currentScore}</strong></div>{currentScore > MAX_SCORE ? <div className="score-warning">⚠ 기준 점수를 초과했습니다.</div> : <div className="score-ok">{selectedComplete ? '✓ 팀 구성 가능' : '포지션을 모두 선택해주세요'}</div>}<div className="score-bar"><div style={{ width: `${Math.min((currentScore / MAX_SCORE) * 100, 100)}%` }} /></div></aside></div>
           </section>
         )}
 
