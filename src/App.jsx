@@ -186,7 +186,14 @@ function UpcomingMatchSection({ teams, players, scheduledMatches, refresh }) {
     const now = new Date()
     return new Date(now.getFullYear(), now.getMonth(), 1)
   })
-  const upcoming = scheduledMatches.filter((match) => new Date(match.starts_at) >= new Date()).sort((a, b) => a.starts_at.localeCompare(b.starts_at))
+  const [currentTime, setCurrentTime] = useState(() => Date.now())
+  useEffect(() => {
+    const timer = window.setInterval(() => setCurrentTime(Date.now()), 60_000)
+    return () => window.clearInterval(timer)
+  }, [])
+  const upcoming = scheduledMatches
+    .filter((match) => new Date(match.starts_at).getTime() > currentTime - 2 * 60 * 60 * 1000)
+    .sort((a, b) => a.starts_at.localeCompare(b.starts_at))
   const todayString = getLocalToday()
   const monthStartOffset = new Date(calendarMonth.getFullYear(), calendarMonth.getMonth(), 1).getDay()
   const daysInMonth = new Date(calendarMonth.getFullYear(), calendarMonth.getMonth() + 1, 0).getDate()
@@ -220,8 +227,9 @@ function UpcomingMatchSection({ teams, players, scheduledMatches, refresh }) {
       {upcoming.length ? <div className="upcoming-grid">{upcoming.map((match) => {
         const a = teams.find((team) => team.id === match.team_a)
         const b = teams.find((team) => team.id === match.team_b)
+        const isInProgress = new Date(match.starts_at).getTime() <= currentTime
         return <article className="upcoming-card" key={match.id}>
-          <div className="upcoming-meta-row"><time className="upcoming-time" dateTime={match.starts_at}>{new Intl.DateTimeFormat('ko-KR', { dateStyle: 'long', timeStyle: 'short' }).format(new Date(match.starts_at))}</time><button className="schedule-delete" type="button" aria-label={`${a?.name ?? '팀 A'} 대 ${b?.name ?? '팀 B'} 일정 삭제`} onClick={async () => { const { error } = await supabase.from('scheduled_matches').delete().eq('id', match.id); setMessage(error ? `삭제하지 못했습니다: ${error.message}` : '예정 경기를 삭제했습니다.'); if (!error) refresh() }}>삭제</button></div>
+          <div className="upcoming-meta-row"><div className="upcoming-time-group"><time className="upcoming-time" dateTime={match.starts_at}>{new Intl.DateTimeFormat('ko-KR', { dateStyle: 'long', timeStyle: 'short' }).format(new Date(match.starts_at))}</time>{isInProgress && <span className="in-progress-badge">● 진행 중</span>}</div><button className="schedule-delete" type="button" aria-label={`${a?.name ?? '팀 A'} 대 ${b?.name ?? '팀 B'} 일정 삭제`} onClick={async () => { const { error } = await supabase.from('scheduled_matches').delete().eq('id', match.id); setMessage(error ? `삭제하지 못했습니다: ${error.message}` : '예정 경기를 삭제했습니다.'); if (!error) refresh() }}>삭제</button></div>
           <div className="upcoming-versus"><div><strong>{a?.name ?? '알 수 없는 팀'}</strong><div className="upcoming-roster">{POSITION_ORDER.map((pos) => <span key={pos}>{getPlayer(players, a?.players?.[pos])?.name ?? '-'}</span>)}</div></div><b>VS</b><div><strong>{b?.name ?? '알 수 없는 팀'}</strong><div className="upcoming-roster">{POSITION_ORDER.map((pos) => <span key={pos}>{getPlayer(players, b?.players?.[pos])?.name ?? '-'}</span>)}</div></div></div>
         </article>
       })}</div> : <div className="empty-small upcoming-empty">등록된 예정 경기가 없습니다.</div>}
