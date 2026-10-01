@@ -21,6 +21,13 @@ function getScore(players, team) {
   }, 0)
 }
 
+function getTeamScore(players, team) {
+  if (team.score_snapshot) {
+    return POSITION_ORDER.reduce((sum, position) => sum + (Number(team.score_snapshot[position]) || 0), 0)
+  }
+  return getScore(players, team)
+}
+
 function opggUrl(player) {
   return `https://op.gg/lol/summoners/kr/${encodeURIComponent(player.nickname)}-${encodeURIComponent(player.tag)}`
 }
@@ -96,7 +103,7 @@ function getTopPlayersByAppearances(players, teams, matches) {
 
 function TeamCard({ team, players, teams, matches }) {
   const stats = getTeamStats(team.id, teams, matches)
-  const score = getScore(players, team)
+  const score = getTeamScore(players, team)
   const days = team.alive ? daysSince(stats.lastMatchDate) : null
 
   return (
@@ -125,7 +132,7 @@ function TeamCard({ team, players, teams, matches }) {
               <span className="position-label">{POSITION_LABELS[position]}</span>
               <span className="player-name">{player?.name ?? '-'}</span>
               <span className="player-nick">{player?.nickname ?? '-'}</span>
-              <span className="player-score">{player?.positions?.[position] ?? 0}</span>
+              <span className="player-score">{team.score_snapshot?.[position] ?? player?.positions?.[position] ?? 0}</span>
             </div>
           )
         })}
@@ -158,6 +165,80 @@ function TeamCard({ team, players, teams, matches }) {
         })}
       </div>
     </article>
+  )
+}
+
+function UpcomingMatchSection({ teams, players, scheduledMatches, refresh }) {
+  const aliveTeams = teams.filter((team) => team.alive)
+  const [teamA, setTeamA] = useState('')
+  const [teamB, setTeamB] = useState('')
+  const getLocalToday = () => {
+    const now = new Date()
+    return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
+  }
+  const [matchDate, setMatchDate] = useState(getLocalToday)
+  const [matchHour, setMatchHour] = useState('')
+  const [matchMinute, setMatchMinute] = useState('')
+  const [message, setMessage] = useState('')
+  const [scheduleFormOpen, setScheduleFormOpen] = useState(false)
+  const [calendarOpen, setCalendarOpen] = useState(false)
+  const [calendarMonth, setCalendarMonth] = useState(() => {
+    const now = new Date()
+    return new Date(now.getFullYear(), now.getMonth(), 1)
+  })
+  const upcoming = scheduledMatches.filter((match) => new Date(match.starts_at) >= new Date()).sort((a, b) => a.starts_at.localeCompare(b.starts_at))
+  const todayString = getLocalToday()
+  const monthStartOffset = new Date(calendarMonth.getFullYear(), calendarMonth.getMonth(), 1).getDay()
+  const daysInMonth = new Date(calendarMonth.getFullYear(), calendarMonth.getMonth() + 1, 0).getDate()
+  const dateCells = Array.from({ length: Math.ceil((monthStartOffset + daysInMonth) / 7) * 7 }, (_, index) => {
+    const day = index - monthStartOffset + 1
+    if (day < 1 || day > daysInMonth) return null
+    return `${calendarMonth.getFullYear()}-${String(calendarMonth.getMonth() + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`
+  })
+
+  async function submitSchedule(event) {
+    event.preventDefault()
+    if (!teamA || !teamB || teamA === teamB) return setMessage('서로 다른 두 팀을 선택하세요.')
+    if (!matchDate || matchHour === '' || matchMinute === '') return setMessage('날짜와 시간을 모두 선택하세요.')
+    const localStart = new Date(`${matchDate}T${matchHour.padStart(2, '0')}:${matchMinute}`)
+    if (localStart <= new Date()) return setMessage('현재보다 늦은 경기 일시를 선택하세요.')
+    const { error } = await supabase.from('scheduled_matches').insert({ team_a: teamA, team_b: teamB, starts_at: localStart.toISOString() })
+    if (error) return setMessage(`등록하지 못했습니다: ${error.message}`)
+    setTeamA('')
+    setTeamB('')
+    setMatchDate(getLocalToday())
+    setCalendarOpen(false)
+    setMatchHour('')
+    setMatchMinute('')
+    setMessage('예정 경기를 등록했습니다.')
+    refresh()
+  }
+
+  return (
+    <section className="upcoming-section">
+      <div className="upcoming-heading"><div><span className="eyebrow">UPCOMING MATCHES</span><h3>예정된 경기</h3></div></div>
+      {upcoming.length ? <div className="upcoming-grid">{upcoming.map((match) => {
+        const a = teams.find((team) => team.id === match.team_a)
+        const b = teams.find((team) => team.id === match.team_b)
+        return <article className="upcoming-card" key={match.id}>
+          <div className="upcoming-meta-row"><time className="upcoming-time" dateTime={match.starts_at}>{new Intl.DateTimeFormat('ko-KR', { dateStyle: 'long', timeStyle: 'short' }).format(new Date(match.starts_at))}</time><button className="schedule-delete" type="button" aria-label={`${a?.name ?? '팀 A'} 대 ${b?.name ?? '팀 B'} 일정 삭제`} onClick={async () => { const { error } = await supabase.from('scheduled_matches').delete().eq('id', match.id); setMessage(error ? `삭제하지 못했습니다: ${error.message}` : '예정 경기를 삭제했습니다.'); if (!error) refresh() }}>삭제</button></div>
+          <div className="upcoming-versus"><div><strong>{a?.name ?? '알 수 없는 팀'}</strong><div className="upcoming-roster">{POSITION_ORDER.map((pos) => <span key={pos}>{getPlayer(players, a?.players?.[pos])?.name ?? '-'}</span>)}</div></div><b>VS</b><div><strong>{b?.name ?? '알 수 없는 팀'}</strong><div className="upcoming-roster">{POSITION_ORDER.map((pos) => <span key={pos}>{getPlayer(players, b?.players?.[pos])?.name ?? '-'}</span>)}</div></div></div>
+        </article>
+      })}</div> : <div className="empty-small upcoming-empty">등록된 예정 경기가 없습니다.</div>}
+      <button className="schedule-add-toggle" type="button" aria-expanded={scheduleFormOpen} onClick={() => setScheduleFormOpen((open) => !open)}>{scheduleFormOpen ? '− 등록 취소' : '+ 예정 경기 추가'}</button>
+      {scheduleFormOpen && <form className="schedule-form" onSubmit={submitSchedule}>
+        <h4>예정 경기 등록</h4>
+        <p>로그인 없이 누구나 등록할 수 있습니다.</p>
+        <div className="schedule-fields">
+          <label className="admin-field">팀 A<select value={teamA} onChange={(e) => setTeamA(e.target.value)} required><option value="">팀 선택</option>{aliveTeams.map((team) => <option key={team.id} value={team.id}>{team.name}</option>)}</select></label>
+          <label className="admin-field">팀 B<select value={teamB} onChange={(e) => setTeamB(e.target.value)} required><option value="">팀 선택</option>{aliveTeams.map((team) => <option key={team.id} value={team.id}>{team.name}</option>)}</select></label>
+          <div className="admin-field calendar-field"><span>날짜</span><button className="calendar-trigger" type="button" aria-haspopup="dialog" aria-expanded={calendarOpen} onClick={() => setCalendarOpen((open) => !open)}>{matchDate || '달력에서 날짜 선택'}<span aria-hidden="true">▣</span></button>{calendarOpen && <div className="calendar-popover" role="dialog" aria-label="경기 날짜 선택"><div className="calendar-header"><button type="button" aria-label="이전 달" onClick={() => setCalendarMonth((month) => new Date(month.getFullYear(), month.getMonth() - 1, 1))}>‹</button><strong>{calendarMonth.getFullYear()}년 {calendarMonth.getMonth() + 1}월</strong><button type="button" aria-label="다음 달" onClick={() => setCalendarMonth((month) => new Date(month.getFullYear(), month.getMonth() + 1, 1))}>›</button></div><div className="calendar-grid calendar-weekdays">{'일월화수목금토'.split('').map((day, index) => <span className={index === 0 ? 'sunday' : ''} key={day}>{day}</span>)}</div><div className="calendar-grid">{dateCells.map((date, index) => date ? <button key={date} type="button" disabled={date < todayString} className={`${date === matchDate ? 'selected' : ''} ${index % 7 === 0 ? 'sunday' : ''}`} onClick={() => { setMatchDate(date); setCalendarOpen(false); setMessage('') }}>{Number(date.slice(-2))}</button> : <span key={`empty-${index}`} />)}</div></div>}</div>
+          <label className="admin-field">시간<div className="schedule-time-selects"><select aria-label="시" value={matchHour} onChange={(e) => setMatchHour(e.target.value)} required><option value="">시</option>{Array.from({ length: 24 }, (_, hour) => <option key={hour} value={String(hour)}>{String(hour).padStart(2, '0')}시</option>)}</select><select aria-label="분" value={matchMinute} onChange={(e) => setMatchMinute(e.target.value)} required><option value="">분</option>{Array.from({ length: 6 }, (_, index) => String(index * 10).padStart(2, '0')).map((minute) => <option key={minute} value={minute}>{minute}분</option>)}</select></div></label>
+          <button className="primary-button" type="submit">경기 일정 등록</button>
+        </div>
+        {message && <div className="schedule-message">{message}</div>}
+      </form>}
+    </section>
   )
 }
 
@@ -263,7 +344,8 @@ function AdminPage({ players, teams, matches, refresh, session }) {
     const playersMap = Object.fromEntries(POSITION_ORDER.map((p) => [p, teamForm[p]]))
     const score = getScore(players, { players: playersMap })
     if (score > MAX_SCORE) return setMessage(`팀 점수가 ${score}점입니다. ${MAX_SCORE}점을 초과했습니다.`)
-    const { error } = await supabase.from('teams').insert({ id: `team${Date.now()}`, name: teamForm.name, alive: true, players: playersMap })
+    const scoreSnapshot = Object.fromEntries(POSITION_ORDER.map((position) => [position, getPlayer(players, playersMap[position])?.positions?.[position] ?? 0]))
+    const { error } = await supabase.from('teams').insert({ id: `team${Date.now()}`, name: teamForm.name, alive: true, players: playersMap, score_snapshot: scoreSnapshot })
     setMessage(error ? error.message : '팀을 추가했습니다.')
     if (!error) {
       setTeamForm({ name: '', top: '', jungle: '', mid: '', adc: '', support: '' })
@@ -463,9 +545,9 @@ function AdminPage({ players, teams, matches, refresh, session }) {
                 <div className="admin-list-row" key={team.id}>
                   <div className="player-admin-main team-admin-main">
                     <strong>{team.name}</strong>
-                    <span>{team.alive ? '생존' : '해제'} · {getScore(players, team)}점</span>
+                    <span>{team.alive ? '생존' : '해제'} · {getTeamScore(players, team)}점</span>
                     <div className="player-admin-scores">
-                      {POSITION_ORDER.map((p) => <span key={p}>{POSITION_LABELS[p]} {getPlayer(players, team.players?.[p])?.name ?? '-'}</span>)}
+                      {POSITION_ORDER.map((p) => <span key={p}>{POSITION_LABELS[p]} {getPlayer(players, team.players?.[p])?.name ?? '-'} · {team.score_snapshot?.[p] ?? getPlayer(players, team.players?.[p])?.positions?.[p] ?? 0}점</span>)}
                     </div>
                   </div>
                   <button className="secondary-button" onClick={() => toggleTeamAlive(team)}>{team.alive ? '해제 처리' : '생존 처리'}</button>
@@ -549,6 +631,7 @@ function App() {
   const [players, setPlayers] = useState([])
   const [teams, setTeams] = useState([])
   const [matches, setMatches] = useState([])
+  const [scheduledMatches, setScheduledMatches] = useState([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [session, setSession] = useState(null)
@@ -556,17 +639,19 @@ function App() {
 
   async function refresh() {
     setLoading(true)
-    const [playersRes, teamsRes, matchesRes] = await Promise.all([
+    const [playersRes, teamsRes, matchesRes, scheduledRes] = await Promise.all([
       supabase.from('players').select('*').order('created_at'),
       supabase.from('teams').select('*').order('created_at'),
       supabase.from('matches').select('*').order('date'),
+      supabase.from('scheduled_matches').select('*').order('starts_at'),
     ])
-    const firstError = playersRes.error || teamsRes.error || matchesRes.error
+    const firstError = playersRes.error || teamsRes.error || matchesRes.error || scheduledRes.error
     if (firstError) setError(firstError.message)
     else {
       setPlayers(playersRes.data ?? [])
       setTeams(teamsRes.data ?? [])
       setMatches(matchesRes.data ?? [])
+      setScheduledMatches(scheduledRes.data ?? [])
       setError('')
     }
     setLoading(false)
@@ -645,6 +730,7 @@ function App() {
 
         {page === 'teams' && !loading && (
           <section>
+            <UpcomingMatchSection teams={teams} players={players} scheduledMatches={scheduledMatches} refresh={refresh} />
             <div className="page-heading"><div><span className="eyebrow">TEAMS & RECORDS</span><h2>팀 기록</h2><p>지금까지의 팀과 경기 기록을 확인할 수 있습니다.</p></div></div>
             <div className="record-highlights"><article className="highlight-card streak-highlight"><span className="highlight-label">🏆 최대 승수</span>{topWinTeams.map(({ team, stats }) => <div className="streak-team" key={team.id}><div className="highlight-team-name">{team.name}</div><strong>{stats.wins}승</strong><div className="highlight-roster">{POSITION_ORDER.map((position) => <span key={position}>{getPlayer(players, team.players?.[position])?.name ?? '-'}</span>)}</div></div>)}</article><article className="highlight-card top-player-highlight"><span className="highlight-label">🔥 경기 참여 TOP 3</span><div className="top-player-list">{topPlayers.map(({ player, count }, index) => <div className="top-player-row" key={player.id}><span className="rank">{index + 1}</span><span className="player-name">{player.name}</span><span className="player-nick">{player.nickname}</span><strong>{count}경기</strong></div>)}</div></article></div>
             <h3 className="section-title">🟢 생존 팀</h3><div className="team-grid">{teams.filter((team) => team.alive).map((team) => <TeamCard key={team.id} team={team} players={players} teams={teams} matches={matches} />)}</div>
